@@ -17,7 +17,7 @@ export default async (req) => {
     });
   }
 
-  // простая проверка ключа: из заголовка x-auth или из ?key=
+  // простая защита по ключу (в заголовке x-auth или ?key=)
   const url = new URL(req.url);
   const provided = req.headers.get('x-auth') || url.searchParams.get('key') || "";
   if (SECRET && provided !== SECRET) {
@@ -26,13 +26,29 @@ export default async (req) => {
 
   try {
     const ct = (req.headers.get('content-type') || '').toLowerCase();
-    let outBody, outHeaders = {};
+    let outBody; let outHeaders = {};
 
     if (req.method === 'GET') {
+      // 1) собираем объект из query
       const payload = Object.fromEntries(url.searchParams);
-      delete payload.key; // не отправляем ключ в PA
+
+      // 2) ключ не отправляем в PA
+      delete payload.key;
+
+      // 3) авто-парсер: если значение похоже на JSON — парсим
+      for (const k of Object.keys(payload)) {
+        const v = payload[k];
+        if (typeof v === 'string') {
+          const s = v.trim();
+          if ((s.startsWith('{') && s.endsWith('}')) || (s.startsWith('[') && s.endsWith(']'))) {
+            try { payload[k] = JSON.parse(s); } catch { /* оставим строкой */ }
+          }
+        }
+      }
+
       outBody = JSON.stringify(payload);
       outHeaders = { 'content-type': 'application/json' };
+
     } else if (req.method === 'POST') {
       if (ct.includes('application/json')) {
         outBody = await req.text();
@@ -40,7 +56,8 @@ export default async (req) => {
       } else if (ct.includes('application/x-www-form-urlencoded')) {
         const raw = await req.text();
         const params = new URLSearchParams(raw);
-        outBody = JSON.stringify(Object.fromEntries(params));
+        const obj = Object.fromEntries(params);
+        outBody = JSON.stringify(obj);
         outHeaders = { 'content-type': 'application/json' };
       } else {
         outBody = await req.text();
